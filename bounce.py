@@ -1,232 +1,210 @@
 #!/usr/bin/env python3
 """
-Bounce - Video Music Mixer
-Combines MP4 video clips with an MP3 audio track
+Bounce - Beat-Synchronized Music Video Creator
+Main CLI that orchestrates all steps to create a music video.
 """
 
-import os
 import sys
+import os
 import subprocess
-import json
 import tempfile
+import shutil
 from pathlib import Path
 
 
-def get_video_files(folder_path):
-    """Get all MP4 files from the specified folder, sorted alphabetically."""
-    folder = Path(folder_path)
-    if not folder.exists() or not folder.is_dir():
-        raise ValueError(f"Invalid folder path: {folder_path}")
+def run_step(step_name, command, description):
+    """
+    Run a processing step and handle errors.
     
-    video_files = sorted(folder.glob("*.mp4")) + sorted(folder.glob("*.MP4"))
+    Args:
+        step_name: Name of the step for display
+        command: Command to run (list of arguments)
+        description: Description of what the step does
+    """
+    print(f"\n{'='*70}")
+    print(f"Step: {step_name}")
+    print(f"{'='*70}")
+    print(f"{description}\n")
     
-    if not video_files:
-        raise ValueError(f"No MP4 files found in {folder_path}")
+    result = subprocess.run(command, capture_output=True, text=True)
     
-    return [str(f) for f in video_files]
-
-
-def get_duration(file_path):
-    """Get duration of a media file in seconds using ffprobe."""
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "format=duration",
-        "-of", "json",
-        file_path
-    ]
+    # Print output
+    if result.stdout:
+        print(result.stdout)
     
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        data = json.loads(result.stdout)
-        return float(data["format"]["duration"])
-    except Exception as e:
-        raise RuntimeError(f"Failed to get duration for {file_path}: {e}")
-
-
-def concatenate_videos(video_files, output_path):
-    """Concatenate multiple video files into one."""
-    # Create a temporary file list for ffmpeg concat
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-        concat_file = f.name
-        for video in video_files:
-            # Convert to absolute path and escape single quotes
-            abs_path = os.path.abspath(video)
-            escaped_path = abs_path.replace("'", "'\\''")
-            f.write(f"file '{escaped_path}'\n")
+    if result.returncode != 0:
+        print(f"\n❌ Error in {step_name}")
+        if result.stderr:
+            print(result.stderr)
+        raise RuntimeError(f"{step_name} failed with exit code {result.returncode}")
     
-    try:
-        # Try copy first for speed, fallback to re-encode if needed
-        cmd = [
-            "ffmpeg",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_file,
-            "-c", "copy",
-            "-y",
-            output_path
-        ]
-        
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            # Copy failed, likely due to incompatible codecs/parameters
-            # Re-encode to ensure compatibility
-            print("  ⚠ Videos have different parameters, re-encoding...")
-            cmd = [
-                "ffmpeg",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", concat_file,
-                "-c:v", "libx264",
-                "-preset", "medium",
-                "-crf", "23",
-                "-c:a", "aac",
-                "-b:a", "192k",
-                "-y",
-                output_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                print(f"FFmpeg error: {result.stderr}")
-                raise RuntimeError(f"FFmpeg concatenation failed")
-        
-        print(f"✓ Concatenated {len(video_files)} video clips")
-    finally:
-        os.unlink(concat_file)
-
-
-def adjust_video_speed(input_video, target_duration, output_path):
-    """Adjust video speed to match target duration."""
-    current_duration = get_duration(input_video)
-    speed_factor = current_duration / target_duration
-    
-    if abs(speed_factor - 1.0) < 0.01:
-        # Duration is close enough, just copy
-        subprocess.run([
-            "ffmpeg", "-i", input_video,
-            "-c", "copy", "-y", output_path
-        ], check=True, capture_output=True)
-        print(f"✓ Video duration matches audio (no speed adjustment needed)")
-    else:
-        # Adjust speed using setpts filter for video
-        if speed_factor > 1:
-            print(f"✓ Speeding up video by {speed_factor:.2f}x to match audio duration")
-        else:
-            print(f"✓ Slowing down video by {1/speed_factor:.2f}x to match audio duration")
-        
-        cmd = [
-            "ffmpeg",
-            "-i", input_video,
-            "-filter:v", f"setpts={1/speed_factor:.6f}*PTS",
-            "-an",  # Remove audio from video
-            "-y",
-            output_path
-        ]
-        
-        subprocess.run(cmd, check=True, capture_output=True)
-
-
-def combine_video_audio(video_path, audio_path, output_path):
-    """Combine video with audio track."""
-    cmd = [
-        "ffmpeg",
-        "-i", video_path,
-        "-i", audio_path,
-        "-c:v", "copy",
-        "-c:a", "aac",
-        "-shortest",
-        "-y",
-        output_path
-    ]
-    
-    subprocess.run(cmd, check=True, capture_output=True)
-    print(f"✓ Combined video with audio track")
-
-
-def create_video_with_music(audio_file, video_folder, output_file="output.mp4"):
-    """Main function to create video with music."""
-    print("🎬 Bounce - Video Music Mixer")
-    print("=" * 50)
-    
-    # Validate inputs
-    if not os.path.exists(audio_file):
-        raise ValueError(f"Audio file not found: {audio_file}")
-    
-    print(f"Audio file: {audio_file}")
-    print(f"Video folder: {video_folder}")
-    print(f"Output file: {output_file}")
-    print()
-    
-    # Get video files
-    print("📁 Scanning for video files...")
-    video_files = get_video_files(video_folder)
-    print(f"✓ Found {len(video_files)} video file(s):")
-    for i, vf in enumerate(video_files, 1):
-        print(f"   {i}. {Path(vf).name}")
-    print()
-    
-    # Get audio duration
-    print("🎵 Analyzing audio duration...")
-    audio_duration = get_duration(audio_file)
-    print(f"✓ Audio duration: {audio_duration:.2f} seconds")
-    print()
-    
-    # Create temporary files
-    with tempfile.TemporaryDirectory() as temp_dir:
-        concat_video = os.path.join(temp_dir, "concatenated.mp4")
-        adjusted_video = os.path.join(temp_dir, "adjusted.mp4")
-        
-        # Step 1: Concatenate videos
-        print("🎞️  Concatenating video clips...")
-        concatenate_videos(video_files, concat_video)
-        
-        # Get concatenated video duration
-        concat_duration = get_duration(concat_video)
-        print(f"✓ Total video duration: {concat_duration:.2f} seconds")
-        print()
-        
-        # Step 2: Adjust video speed to match audio
-        print("⚡ Adjusting video timing...")
-        adjust_video_speed(concat_video, audio_duration, adjusted_video)
-        print()
-        
-        # Step 3: Combine with audio
-        print("🎶 Adding audio track...")
-        combine_video_audio(adjusted_video, audio_file, output_file)
-    
-    print()
-    print("=" * 50)
-    print(f"✅ Success! Video created: {output_file}")
-    
-    # Show final file size
-    file_size = os.path.getsize(output_file) / (1024 * 1024)
-    print(f"📊 File size: {file_size:.2f} MB")
+    return result
 
 
 def main():
-    """CLI entry point."""
+    """Main CLI entry point."""
+    
     if len(sys.argv) < 3:
-        print("Usage: python bounce.py <audio.mp3> <videos_folder> [output.mp4]")
-        print()
-        print("Arguments:")
-        print("  audio.mp3      - Path to your MP3 audio file")
-        print("  videos_folder  - Path to folder containing MP4 video files")
-        print("  output.mp4     - (Optional) Output file name (default: output.mp4)")
-        print()
-        print("Example:")
-        print("  python bounce.py music.mp3 ./clips/ final_video.mp4")
+        print("Bounce - Beat-Synchronized Music Video Creator")
+        print("=" * 70)
+        print("\nUsage: python bounce.py <audio_file> <video_file> [output_file] [options]")
+        print("\nArguments:")
+        print("  audio_file  - MP3 audio file (the music)")
+        print("  video_file  - MP4 video file (the footage)")
+        print("  output_file - Output video file (default: output.mp4)")
+        print("\nOptions:")
+        print("  --scene-threshold=N    - Scene detection sensitivity 0.0-1.0 (default: 0.3)")
+        print("                           Lower = more sensitive, detects more scenes")
+        print("  --beats-per-measure=N  - Beats per measure (default: 4 for 4/4 time)")
+        print("  --max-scene-measures=N - Maximum scene length in measures (default: no limit)")
+        print("                           Long scenes will be split into chunks")
+        print("\nExamples:")
+        print("  python bounce.py song.mp3 video.mp4")
+        print("  python bounce.py song.mp3 video.mp4 result.mp4")
+        print("  python bounce.py song.mp3 video.mp4 result.mp4 --scene-threshold=0.2")
+        print("  python bounce.py song.mp3 video.mp4 result.mp4 --max-scene-measures=16")
+        print("\nWhat it does:")
+        print("  1. Detects beats in the audio")
+        print("  2. Filters beats to measures (downbeats)")
+        print("  3. Detects scene changes in the video")
+        print("  4. Aligns scenes to measure timestamps")
+        print("  5. Assembles final beat-synchronized video")
+        print("\n" + "=" * 70)
         sys.exit(1)
     
+    # Parse arguments
     audio_file = sys.argv[1]
-    video_folder = sys.argv[2]
-    output_file = sys.argv[3] if len(sys.argv) > 3 else "output.mp4"
+    video_file = sys.argv[2]
+    output_file = "output.mp4"
+    scene_threshold = 0.3
+    beats_per_measure = 4
+    max_scene_measures = None
+    
+    # Parse optional arguments
+    for arg in sys.argv[3:]:
+        if arg.startswith("--scene-threshold="):
+            try:
+                scene_threshold = float(arg.split("=")[1])
+            except ValueError:
+                print("⚠ Warning: Invalid scene threshold, using default 0.3")
+        elif arg.startswith("--beats-per-measure="):
+            try:
+                beats_per_measure = int(arg.split("=")[1])
+            except ValueError:
+                print("⚠ Warning: Invalid beats per measure, using default 4")
+        elif arg.startswith("--max-scene-measures="):
+            try:
+                max_scene_measures = int(arg.split("=")[1])
+            except ValueError:
+                print("⚠ Warning: Invalid max scene measures, ignoring")
+        elif not arg.startswith("--"):
+            output_file = arg
+    
+    # Validate inputs
+    if not os.path.exists(audio_file):
+        print(f"❌ Error: Audio file not found: {audio_file}")
+        sys.exit(1)
+    
+    if not os.path.exists(video_file):
+        print(f"❌ Error: Video file not found: {video_file}")
+        sys.exit(1)
+    
+    print("\n" + "=" * 70)
+    print("🎬 Bounce - Beat-Synchronized Music Video Creator")
+    print("=" * 70)
+    print(f"\nInput audio:  {audio_file}")
+    print(f"Input video:  {video_file}")
+    print(f"Output file:  {output_file}")
+    print(f"\nSettings:")
+    print(f"  Scene threshold:      {scene_threshold}")
+    print(f"  Beats per measure:    {beats_per_measure}")
+    if max_scene_measures:
+        print(f"  Max scene measures:   {max_scene_measures}")
+    else:
+        print(f"  Max scene measures:   no limit")
+    
+    # Create working directory for temporary files
+    work_dir = tempfile.mkdtemp(prefix="bounce_")
+    print(f"\nWorking directory: {work_dir}")
     
     try:
-        create_video_with_music(audio_file, video_folder, output_file)
+        # Define file paths
+        beats_file = os.path.join(work_dir, "beats.txt")
+        measures_file = os.path.join(work_dir, "measures.txt")
+        scenes_dir = os.path.join(work_dir, "scenes")
+        scene_plan_file = os.path.join(work_dir, "scene_plan.txt")
+        
+        # Step 1: Detect beats
+        run_step(
+            "1. Beat Detection",
+            ["python3", "detect_beats.py", audio_file, beats_file],
+            "Analyzing audio to detect beats..."
+        )
+        
+        # Step 2: Filter to measures
+        run_step(
+            "2. Measure Filtering",
+            ["python3", "filter_beats.py", beats_file, measures_file, str(beats_per_measure)],
+            f"Filtering beats to measures ({beats_per_measure}/4 time)..."
+        )
+        
+        # Step 3: Detect scenes
+        run_step(
+            "3. Scene Detection",
+            ["python3", "detect_scenes.py", video_file, scenes_dir, str(scene_threshold)],
+            "Detecting scene changes in video..."
+        )
+        
+        # Step 4: Align scenes to measures
+        align_cmd = ["python3", "align_scenes.py", scenes_dir, measures_file, scene_plan_file]
+        if max_scene_measures:
+            align_cmd.append(str(max_scene_measures))
+        
+        run_step(
+            "4. Scene Alignment",
+            align_cmd,
+            "Aligning scenes to measure timestamps..."
+        )
+        
+        # Step 5: Assemble final video
+        run_step(
+            "5. Video Assembly",
+            ["python3", "assemble_video.py", scenes_dir, scene_plan_file, audio_file, output_file],
+            "Assembling final beat-synchronized video..."
+        )
+        
+        print("\n" + "=" * 70)
+        print("🎉 SUCCESS! Your beat-synchronized music video is ready!")
+        print("=" * 70)
+        print(f"\n📄 Output file: {output_file}")
+        
+        # Show file size and duration
+        if os.path.exists(output_file):
+            size_mb = os.path.getsize(output_file) / (1024 * 1024)
+            print(f"📊 File size:   {size_mb:.2f} MB")
+            
+            # Get duration
+            cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                   "-of", "default=noprint_wrappers=1:nokey=1", output_file]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode == 0:
+                duration = float(result.stdout.strip())
+                print(f"⏱️  Duration:    {duration:.2f} seconds")
+        
+        print("\n" + "=" * 70)
+        
     except Exception as e:
-        print(f"\n❌ Error: {e}", file=sys.stderr)
+        print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
+    
+    finally:
+        # Clean up working directory
+        if os.path.exists(work_dir):
+            print(f"\n🧹 Cleaning up temporary files...")
+            shutil.rmtree(work_dir)
+            print(f"✓ Removed {work_dir}")
 
 
 if __name__ == "__main__":
