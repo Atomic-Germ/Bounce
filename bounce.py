@@ -9,7 +9,49 @@ import os
 import subprocess
 import tempfile
 import shutil
+import threading
+import time
 from pathlib import Path
+
+
+class Spinner:
+    """A simple spinner to show progress during long operations."""
+    
+    def __init__(self, message="Processing"):
+        self.message = message
+        self.running = False
+        self.thread = None
+        self.frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        self.frame_index = 0
+    
+    def _spin(self):
+        """Run the spinner animation."""
+        while self.running:
+            frame = self.frames[self.frame_index % len(self.frames)]
+            sys.stderr.write(f"\r{frame} {self.message}")
+            sys.stderr.flush()
+            self.frame_index += 1
+            time.sleep(0.1)
+    
+    def start(self):
+        """Start the spinner."""
+        if not sys.stderr.isatty():
+            # Don't show spinner if not in a terminal
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._spin)
+        self.thread.daemon = True
+        self.thread.start()
+    
+    def stop(self):
+        """Stop the spinner and clear the line."""
+        if not self.running:
+            return
+        self.running = False
+        if self.thread:
+            self.thread.join()
+        sys.stderr.write("\r" + " " * (len(self.message) + 3) + "\r")
+        sys.stderr.flush()
 
 
 def run_step(step_name, command, description):
@@ -26,7 +68,13 @@ def run_step(step_name, command, description):
     print(f"{'='*70}")
     print(f"{description}\n")
     
+    # Start spinner while subprocess runs
+    spinner = Spinner(f"{step_name}...")
+    spinner.start()
+    
     result = subprocess.run(command, capture_output=True, text=True)
+    
+    spinner.stop()
     
     # Print output
     if result.stdout:
@@ -53,16 +101,19 @@ def main():
         print("  video_file  - MP4 video file (the footage)")
         print("  output_file - Output video file (default: output.mp4)")
         print("\nOptions:")
-        print("  --scene-threshold=N    - Scene detection sensitivity 0.0-1.0 (default: 0.3)")
-        print("                           Lower = more sensitive, detects more scenes")
-        print("  --beats-per-measure=N  - Beats per measure (default: 4 for 4/4 time)")
-        print("  --max-scene-measures=N - Maximum scene length in measures (default: no limit)")
-        print("                           Long scenes will be split into chunks")
+        print("  --scene-threshold=N      - Scene detection sensitivity 0.0-1.0 (default: 0.3)")
+        print("                             Lower = more sensitive, detects more scenes")
+        print("  --beats-per-measure=N    - Beats per measure (default: 4 for 4/4 time)")
+        print("  --max-scene-measures=N   - Maximum scene length in measures (default: no limit)")
+        print("                             Long scenes will be split into chunks")
+        print("  --skip-boring=N          - Skip boring segments (upper half static for N seconds)")
+        print("                             Useful for motorcycle videos, removes straight-line sections")
         print("\nExamples:")
         print("  python bounce.py song.mp3 video.mp4")
         print("  python bounce.py song.mp3 video.mp4 result.mp4")
         print("  python bounce.py song.mp3 video.mp4 result.mp4 --scene-threshold=0.2")
         print("  python bounce.py song.mp3 video.mp4 result.mp4 --max-scene-measures=16")
+        print("  python bounce.py song.mp3 video.mp4 result.mp4 --skip-boring=10")
         print("\nWhat it does:")
         print("  1. Detects beats in the audio")
         print("  2. Filters beats to measures (downbeats)")
@@ -79,6 +130,7 @@ def main():
     scene_threshold = 0.3
     beats_per_measure = 4
     max_scene_measures = None
+    skip_boring_seconds = None
     
     # Parse optional arguments
     for arg in sys.argv[3:]:
@@ -97,6 +149,11 @@ def main():
                 max_scene_measures = int(arg.split("=")[1])
             except ValueError:
                 print("⚠ Warning: Invalid max scene measures, ignoring")
+        elif arg.startswith("--skip-boring="):
+            try:
+                skip_boring_seconds = float(arg.split("=")[1])
+            except ValueError:
+                print("⚠ Warning: Invalid skip boring seconds, ignoring")
         elif not arg.startswith("--"):
             output_file = arg
     
@@ -122,6 +179,10 @@ def main():
         print(f"  Max scene measures:   {max_scene_measures}")
     else:
         print(f"  Max scene measures:   no limit")
+    if skip_boring_seconds:
+        print(f"  Skip boring segments: >{skip_boring_seconds}s static upper half")
+    else:
+        print(f"  Skip boring segments: disabled")
     
     # Create working directory for temporary files
     work_dir = tempfile.mkdtemp(prefix="bounce_")
@@ -133,6 +194,23 @@ def main():
         measures_file = os.path.join(work_dir, "measures.txt")
         scenes_dir = os.path.join(work_dir, "scenes")
         scene_plan_file = os.path.join(work_dir, "scene_plan.txt")
+        interesting_segments_file = None
+        
+        # Step 0 (Optional): Detect boring segments
+        if skip_boring_seconds:
+            interesting_segments_file = os.path.join(work_dir, "interesting_segments.txt")
+            
+            run_step(
+                "0. Boring Segment Detection",
+                ["python3", "detect_boring_segments.py", video_file, str(skip_boring_seconds), "0.01"],
+                f"Detecting segments where upper half is static for >{skip_boring_seconds}s..."
+            )
+            
+            # Move the output files to work_dir
+            if os.path.exists("interesting_segments.txt"):
+                shutil.move("interesting_segments.txt", interesting_segments_file)
+            if os.path.exists("boring_segments.txt"):
+                shutil.move("boring_segments.txt", os.path.join(work_dir, "boring_segments.txt"))
         
         # Step 1: Detect beats
         run_step(

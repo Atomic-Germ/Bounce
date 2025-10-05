@@ -7,6 +7,7 @@ Detects beats in an audio file and outputs timestamps to a text file.
 import sys
 import librosa
 import numpy as np
+from spinner import Spinner
 
 
 def detect_beats(audio_file, output_file="beats.txt"):
@@ -28,8 +29,12 @@ def detect_beats(audio_file, output_file="beats.txt"):
     print(f"✓ Audio loaded: {len(y) / sr:.2f} seconds, sample rate: {sr} Hz")
     
     # Detect beats
-    print("Detecting beats...")
+    spinner = Spinner("Detecting beats...")
+    spinner.start()
+    
     tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+    
+    spinner.stop()
     
     # Convert beat frames to time in seconds
     beat_times = librosa.frames_to_time(beat_frames, sr=sr)

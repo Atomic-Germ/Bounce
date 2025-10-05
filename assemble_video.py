@@ -9,6 +9,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from spinner import Spinner
 
 
 def load_scene_plan(plan_file):
@@ -235,20 +236,40 @@ def assemble_video(scenes_dir, plan_file, audio_file, output_file="output.mp4"):
             print(f"  Scene {i:2d}: {scene['file']}{part_info}{offset_info} - "
                   f"{scene['original_duration']:.2f}s → {scene['trim_to']:.2f}s")
             
+            spinner = Spinner(f"    Trimming scene {i}/{len(scenes)}...")
+            spinner.start()
+            
             trim_scene(scene_path, scene['trim_to'], trimmed_path, scene['start_offset'])
+            
+            spinner.stop()
+            
             trimmed_files.append(trimmed_path)
         
         print(f"✓ Trimmed {len(trimmed_files)} scenes")
         
         # Concatenate all trimmed scenes
         print(f"\n🎞️  Concatenating trimmed scenes...")
+        
+        spinner = Spinner("Concatenating video files...")
+        spinner.start()
+        
         concatenated_path = os.path.join(temp_dir, "concatenated.mp4")
         concatenate_videos(trimmed_files, concatenated_path)
+        
+        spinner.stop()
+        
         print(f"✓ Concatenated into single video")
         
         # Add audio track
         print(f"\n🎵 Adding audio track: {audio_file}")
+        
+        spinner = Spinner("Encoding final video with audio...")
+        spinner.start()
+        
         add_audio(concatenated_path, audio_file, output_file)
+        
+        spinner.stop()
+        
         print(f"✓ Added audio track")
     
     # Get final file info

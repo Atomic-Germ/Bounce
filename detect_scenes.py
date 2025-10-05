@@ -9,6 +9,7 @@ import os
 import subprocess
 import json
 from pathlib import Path
+from spinner import Spinner
 
 
 def get_duration(video_file):
@@ -60,7 +61,12 @@ def detect_scene_changes(video_file, threshold=0.3):
         "-"
     ]
     
+    spinner = Spinner("Analyzing video frames...")
+    spinner.start()
+    
     result = subprocess.run(cmd, capture_output=True, text=True)
+    
+    spinner.stop()
     
     # Parse scene change times from showinfo output (in stderr)
     scene_times = [0.0]  # Always start at 0
@@ -99,7 +105,12 @@ def detect_scene_changes(video_file, threshold=0.3):
             "-"
         ]
         
+        spinner = Spinner("Re-analyzing with lower threshold...")
+        spinner.start()
+        
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        spinner.stop()
         
         scene_times = [0.0]
         for line in result.stderr.split('\n'):
@@ -130,7 +141,12 @@ def detect_scene_changes(video_file, threshold=0.3):
             "-"
         ]
         
+        spinner = Spinner("Re-analyzing with very sensitive threshold...")
+        spinner.start()
+        
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        spinner.stop()
         
         scene_times = [0.0]
         for line in result.stderr.split('\n'):
@@ -201,7 +217,12 @@ def split_video_into_scenes(video_file, scene_times, duration, output_dir):
             scene_file
         ]
         
+        spinner = Spinner(f"    Extracting scene {i+1}/{len(scene_times)}...")
+        spinner.start()
+        
         result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        spinner.stop()
         
         if result.returncode == 0:
             scene_files.append(scene_file)
