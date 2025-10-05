@@ -29,6 +29,9 @@ python bounce.py song.mp3 video.mp4 result.mp4 --scene-threshold=0.2 --max-scene
 - `--max-scene-measures=N` - Maximum scene length in measures (default: no limit)
   - Long scenes will be split into chunks for more dynamic cuts
   - Example: `--max-scene-measures=16` splits scenes longer than 16 measures
+- `--skip-boring=N` - Skip boring segments where upper half is static for N+ seconds (default: disabled)
+  - Useful for motorcycle videos to remove long straight-line sections
+  - Example: `--skip-boring=10` removes segments where sky/horizon doesn't change for 10+ seconds
 
 ## What It Does
 
